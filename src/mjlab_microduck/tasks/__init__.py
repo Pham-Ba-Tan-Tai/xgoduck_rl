@@ -330,7 +330,7 @@ XgoduckRlCfg = replace(
 )
 
 
-from mjlab.managers import RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .xgoduck_physics import configure_xgoduck_physics
@@ -502,10 +502,35 @@ def _retarget_xgoduck_standup(cfg):
     return configure_xgoduck_physics(cfg)
 
 
+# The drop tilt widens easy→hard, like MicroDuck's ground_state_mix that the
+# drop start replaced: near-upright landings first, any orientation by 2500.
+_XGODUCK_STANDUP_TILT_STAGES = (
+    (0, 0.35),
+    (600, 1.0),
+    (1500, 2.0),
+    (2500, math.pi),
+)
+
+
 def _xgoduck_standup_cfg(**kwargs):
     cfg = make_microduck_standup_env_cfg(**kwargs)
     cfg.scene.entities = {"robot": XGODUCK_STANDUP_ROBOT_CFG}
-    return _retarget_xgoduck_standup(cfg)
+    cfg = _retarget_xgoduck_standup(cfg)
+    if not kwargs.get("play", False):
+        cfg.events["set_ground_state"].params["euler_abs_max"] = (
+            _XGODUCK_STANDUP_TILT_STAGES[0][1]
+        )
+        cfg.curriculum["drop_tilt"] = CurriculumTermCfg(
+            func=microduck_mdp.event_param_curriculum,
+            params={
+                "event_name": "set_ground_state",
+                "param_stages": [
+                    {"step": it * 24, "params": {"euler_abs_max": tilt}}
+                    for it, tilt in _XGODUCK_STANDUP_TILT_STAGES
+                ],
+            },
+        )
+    return cfg
 
 
 def _xgoduck_ground_pick_cfg(**kwargs):

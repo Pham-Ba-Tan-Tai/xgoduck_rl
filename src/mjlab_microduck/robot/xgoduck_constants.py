@@ -159,8 +159,23 @@ def _apply_bom(spec: mujoco.MjSpec, variant: str) -> mujoco.MjSpec:
         body.iquat = b["iquat"]
         body.fullinertia = [math.nan] * 6
         if "pos" in b:
+            _shrink_parent_meshes(spec, body, b["pos"])
             body.pos = b["pos"]
     return spec
+
+
+def _shrink_parent_meshes(spec: mujoco.MjSpec, body, new_pos) -> None:
+    """Scale the parent link's meshes so they end at the moved child joint.
+
+    Link meshes sit in their body frame (geom pos 0, quat 1) with the joint at
+    the origin, so a per-axis scale of new/old child position shortens the
+    collision shape along the link. Axes the link does not span keep scale 1.
+    """
+    old = list(body.pos)
+    scale = [n / o if abs(o) > 1e-3 else 1.0 for n, o in zip(new_pos, old)]
+    for geom in body.parent.geoms:
+        if geom.meshname:
+            spec.mesh(geom.meshname).scale = scale
 
 
 def with_bom(robot: EntityCfg, variant: str) -> EntityCfg:
