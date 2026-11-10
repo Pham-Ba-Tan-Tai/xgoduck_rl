@@ -9,6 +9,8 @@ Trunk heights keep the soles clear of the floor.
 """
 
 from copy import deepcopy
+from dataclasses import replace
+import json
 import math
 import os
 from pathlib import Path
@@ -105,6 +107,70 @@ actuators = FrictionDRBamActuatorCfg(
     delay_min_lag=1,
     delay_max_lag=1,
 )
+
+
+# Feetech SCS0009 servo-swap study (road map Phase 4, option B).
+# Datasheet estimate, not a BAM fit: 2.3 kg·cm stall and 0.1 s/60° at 6 V
+# give kt = V/ω0 and R = kt·V/τ_stall. Absolute friction is scaled from the
+# HLS1910 fit by the torque ratio (0.22). Firmware gain and delay are unchanged.
+# The servo is rated 4–7.4 V, so it runs from a 6 V regulator, not the 2S pack.
+# Replace this with a real BAM fit once one servo is measured (Phase 9).
+_SCS0009_JSON: Path = _ROBOT_DIR / "params" / "scs0009_datasheet.json"
+assert _SCS0009_JSON.exists(), f"SCS0009 params not found: {_SCS0009_JSON}"
+
+
+def to_scs0009(actuator: FrictionDRBamActuatorCfg) -> FrictionDRBamActuatorCfg:
+    """Same actuator config (targets, delay, gains) with SCS0009 motor params."""
+    return replace(
+        actuator,
+        json_path=str(_SCS0009_JSON),
+        vin_range=(5.8, 6.0),
+        vin_min=5.5,
+    )
+
+
+# Full-BOM mass study (road map Phase 4, 2026-11-09). Per-body mass, CoM and
+# inertia from every BOM part, with the UNO Q stack on the trunk's back, made by
+# cad/xgoduck_scs0009/export_bom_models.py. "scs0009_lean" also shortens the
+# thigh, shank and neck (moved body pos), so the trunk spawns stand_dz lower.
+BOM_VARIANTS = ("hls1910_bom", "scs0009_lean")
+
+
+def _bom_json(variant: str) -> dict:
+    path = _ROBOT_DIR / "params" / f"bom_{variant}.json"
+    assert path.exists(), f"BOM model not found: {path}"
+    return json.loads(path.read_text())
+
+
+def _apply_bom(spec: mujoco.MjSpec, variant: str) -> mujoco.MjSpec:
+    bom = _bom_json(variant)
+    ranges = bom.get("joint_range_rad", {})
+    for joint in spec.joints:
+        if joint.name in ranges:
+            joint.range = ranges[joint.name]
+    bodies = bom["bodies"]
+    for body in spec.bodies:
+        b = bodies.get(body.name)
+        if b is None:
+            continue
+        body.mass = b["mass"]
+        body.ipos = b["ipos"]
+        body.inertia = b["inertia"]
+        body.iquat = b["iquat"]
+        body.fullinertia = [math.nan] * 6
+        if "pos" in b:
+            body.pos = b["pos"]
+    return spec
+
+
+def with_bom(robot: EntityCfg, variant: str) -> EntityCfg:
+    """Same robot config with BOM masses (and lean link lengths) applied."""
+    robot = deepcopy(robot)
+    base_fn = robot.spec_fn
+    robot.spec_fn = lambda: _apply_bom(base_fn(), variant)
+    x, y, z = robot.init_state.pos
+    robot.init_state.pos = (x, y, z + _bom_json(variant)["stand_dz_m"])
+    return robot
 
 
 def _disable_unnamed_geoms(spec: mujoco.MjSpec) -> mujoco.MjSpec:

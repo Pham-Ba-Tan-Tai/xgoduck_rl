@@ -691,6 +691,63 @@ register_mjlab_task(
 )
 
 
+# SCS0009 servo-swap study: same XgoDuck tasks, every joint on an SCS0009.
+# Logs go to <experiment>_scs0009 so they never mix with the HLS1910 baseline.
+from mjlab_microduck.robot.xgoduck_constants import to_scs0009
+
+
+def _with_scs0009(cfg):
+    robot = deepcopy(cfg.scene.entities["robot"])
+    robot.articulation.actuators = tuple(
+        to_scs0009(a) for a in robot.articulation.actuators
+    )
+    cfg.scene.entities["robot"] = robot
+    return cfg
+
+
+for _task_id, _factory, _runner_cfg in (
+    ("Mjlab-Velocity-Flat-XgoDuck-SCS0009", _xgoduck_velocity_cfg, XgoduckRlCfg),
+    ("Mjlab-StandUp-Flat-XgoDuck-SCS0009", _xgoduck_standup_cfg, XgoduckStandUpRlCfg),
+    ("Mjlab-Velocity-Swizzle-XgoDuck-SCS0009", make_xgoduck_velocity_swizzle_env_cfg,
+     XgoduckSwizzleRlCfg),
+):
+    register_mjlab_task(
+        task_id=_task_id,
+        env_cfg=_with_scs0009(_factory()),
+        play_env_cfg=_with_scs0009(_factory(play=True)),
+        rl_cfg=replace(
+            _runner_cfg, experiment_name=_runner_cfg.experiment_name + "_scs0009",
+        ),
+        runner_cls=MicroduckOnPolicyRunner,
+    )
+
+
+# Full-BOM mass study: the corrected baseline (HLS1910, 872 g) and the lean
+# SCS0009 duck (753 g). Logs go to <experiment>_<variant>.
+from mjlab_microduck.robot.xgoduck_constants import with_bom
+
+
+def _with_bom(cfg, variant):
+    cfg.scene.entities["robot"] = with_bom(cfg.scene.entities["robot"], variant)
+    return cfg if variant == "hls1910_bom" else _with_scs0009(cfg)
+
+
+for _variant, _suffix in (("hls1910_bom", "BOM"), ("scs0009_lean", "SCS0009-Lean")):
+    for _task_id, _factory, _runner_cfg in (
+        (f"Mjlab-Velocity-Flat-XgoDuck-{_suffix}", _xgoduck_velocity_cfg, XgoduckRlCfg),
+        (f"Mjlab-StandUp-Flat-XgoDuck-{_suffix}", _xgoduck_standup_cfg, XgoduckStandUpRlCfg),
+    ):
+        register_mjlab_task(
+            task_id=_task_id,
+            env_cfg=_with_bom(_factory(), _variant),
+            play_env_cfg=_with_bom(_factory(play=True), _variant),
+            rl_cfg=replace(
+                _runner_cfg, experiment_name=f"{_runner_cfg.experiment_name}_{_variant}",
+            ),
+            runner_cls=MicroduckOnPolicyRunner,
+        )
+
+
 from mjlab_microduck.play_hook import maybe_inject_latest_checkpoint
 
 # After all task ids are registered: `play TASK` with no checkpoint flag
