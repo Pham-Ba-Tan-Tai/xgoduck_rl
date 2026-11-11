@@ -114,7 +114,9 @@ actuators = FrictionDRBamActuatorCfg(
 # give kt = V/ω0 and R = kt·V/τ_stall. Absolute friction is scaled from the
 # HLS1910 fit by the torque ratio (0.22). Firmware gain and delay are unchanged.
 # The servo is rated 4–7.4 V, so it runs from a 6 V regulator, not the 2S pack.
-# Replace this with a real BAM fit once one servo is measured (Phase 9).
+# Replace this with a real BAM fit once one servo is measured (Phase 9). Until
+# then the lean tasks randomize friction, armature and kp_fw over a wide range
+# (SCS0009_*_DR in tasks/__init__.py) so the policy does not trust the guesses.
 _SCS0009_JSON: Path = _ROBOT_DIR / "params" / "scs0009_datasheet.json"
 assert _SCS0009_JSON.exists(), f"SCS0009 params not found: {_SCS0009_JSON}"
 

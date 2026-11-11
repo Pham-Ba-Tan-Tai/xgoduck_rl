@@ -330,7 +330,7 @@ XgoduckRlCfg = replace(
 )
 
 
-from mjlab.managers import CurriculumTermCfg, RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, EventTermCfg, RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .xgoduck_physics import configure_xgoduck_physics
@@ -721,12 +721,42 @@ register_mjlab_task(
 from mjlab_microduck.robot.xgoduck_constants import to_scs0009
 
 
+# The SCS0009 motor file is a datasheet estimate (kt, R) plus HLS1910 numbers
+# for everything nobody has measured yet: gearbox friction, reflected rotor
+# inertia (armature) and the firmware P gain. Until one servo is on the bench
+# (road map Phase 9) the policy trains across the plausible range of each, so
+# it does not overfit to a guessed value. The MicroDuck defaults (+-10 %) are
+# for a servo that WAS measured; these are wider on purpose.
+#   friction  0.5-2.0x : scaled from the HLS1910 fit by the torque ratio only
+#   armature  0.6-1.6x : iron-core rotor on a 1:416 gear vs 1:320 coreless;
+#                        J*N^2 lands anywhere from 0.0012 to 0.0030 kg*m^2
+#   kp_fw     0.7-1.3x : SCS-series firmware P gain is not published
+SCS0009_FRICTION_DR = (0.5, 2.0)
+SCS0009_ARMATURE_DR = (0.6, 1.6)
+SCS0009_KP_DR = (0.7, 1.3)
+
+
 def _with_scs0009(cfg):
     robot = deepcopy(cfg.scene.entities["robot"])
     robot.articulation.actuators = tuple(
         to_scs0009(a) for a in robot.articulation.actuators
     )
     cfg.scene.entities["robot"] = robot
+    if "randomize_joint_friction" in cfg.events:
+        cfg.events["randomize_joint_friction"].params["scale_range"] = SCS0009_FRICTION_DR
+    if "randomize_armature" in cfg.events:
+        cfg.events["randomize_armature"].params["ranges"] = SCS0009_ARMATURE_DR
+    # Gain DR is off in the MicroDuck recipes (the HLS1910 P gain was fitted).
+    cfg.events["randomize_motor_gains"] = EventTermCfg(
+        func=microduck_mdp.randomize_delayed_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "operation": "scale",
+            "kp_range": SCS0009_KP_DR,
+            "kd_range": (1.0, 1.0),
+        },
+    )
     return cfg
 
 
