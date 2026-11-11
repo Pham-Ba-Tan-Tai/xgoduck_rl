@@ -3,6 +3,7 @@
 #   bash scripts/brev_lean.sh setup   # clone/update, uv sync, 2-iteration GPU test
 #   bash scripts/brev_lean.sh start   # walk (3000 it) + stand-up (5000 it) in tmux
 #   bash scripts/brev_lean.sh watch   # one-screen status of both runs
+#   bash scripts/brev_lean.sh score   # progress table (reward, falls, tracking error) every 100 iterations
 # First time on a fresh box (nothing cloned yet):
 #   curl -sL https://raw.githubusercontent.com/Pham-Ba-Tan-Tai/xgoduck_rl/main/scripts/brev_lean.sh | bash -s setup
 set -u
@@ -50,7 +51,63 @@ watch() {
   ls ~/xgoduck_rl/logs/rsl_rl/*/*/model_*.pt 2>/dev/null | sed 's#.*/logs/rsl_rl/##' | sort -t_ -k2 -n | tail -2
 }
 
+score() {
+  # Progress table from the training logs: one row every STEP iterations plus the latest.
+  python3 - "${2:-100}" <<'PY'
+import re, sys, os
+step = int(sys.argv[1])
+H = os.path.expanduser("~")
+def parse(path):
+    txt = open(path, errors="ignore").read()
+    txt = re.sub(r"\x1b\[[0-9;]*m", "", txt)
+    blocks = re.split(r"#{20,}", txt)
+    rows = []
+    for b in blocks:
+        m = re.search(r"Learning iteration (\d+)/(\d+)", b)
+        if not m: continue
+        d = {"it": int(m.group(1)), "total": int(m.group(2))}
+        for k, v in re.findall(r"^\s*([A-Za-z_/ ]+?):\s+(-?[\d.]+)\s*$", b, re.M):
+            d[k.strip()] = float(v)
+        eta = re.search(r"ETA:\s+(\S+)", b)
+        d["eta"] = eta.group(1) if eta else "?"
+        rows.append(d)
+    return rows
+def show(name, path, cols, hint):
+    if not os.path.exists(path):
+        print(f"== {name}: no log yet"); return
+    rows = parse(path)
+    if not rows:
+        print(f"== {name}: no iterations yet"); return
+    last = rows[-1]
+    print(f"== {name}: iteration {last['it']}/{last['total']}   ETA {last['eta']}")
+    hdr = f"{'iter':>6} " + " ".join(f"{c[0]:>{c[2]}}" for c in cols)
+    print(hdr)
+    picked = [r for r in rows if r["it"] % step == 0 and r["it"] > 0]
+    if not picked or picked[-1] is not last: picked.append(last)
+    for r in picked:
+        print(f"{r['it']:>6} " + " ".join(f"{r.get(c[1], float('nan')):>{c[2]}.{c[3]}f}" for c in cols))
+    print("   " + hint)
+    print()
+show("WALK", f"{H}/walk.log", [
+    ("reward", "Mean reward", 7, 2),
+    ("ep_len", "Mean episode length", 7, 1),
+    ("falls", "Episode_Termination/fell_over", 6, 2),
+    ("vel_err", "Metrics/twist/error_vel_xy", 8, 3),
+    ("yaw_err", "Metrics/twist/error_vel_yaw", 8, 3),
+    ("slip", "Metrics/slip_velocity_mean", 6, 3),
+], "good = reward up, ep_len near the max, falls near 0, vel_err under ~0.1 m/s")
+show("STAND-UP", f"{H}/stand.log", [
+    ("reward", "Mean reward", 7, 2),
+    ("ep_len", "Mean episode length", 7, 1),
+    ("tilt", "Curriculum/drop_tilt", 5, 2),
+    ("upright", "Episode_Reward/upright_sharp", 8, 3),
+    ("standing", "Episode_Reward/standing_composite", 9, 3),
+    ("height", "Episode_Reward/height_stand", 7, 3),
+], "tilt = how hard the fall is (0.35 easy -> 3.14 any way up); good = upright/standing stay high as tilt grows")
+PY
+}
+
 case "${1:-}" in
-  setup) setup ;; start) start ;; watch) watch ;;
-  *) echo "usage: $0 setup|start|watch"; exit 1 ;;
+  setup) setup ;; start) start ;; watch) watch ;; score) score "$@" ;;
+  *) echo "usage: $0 setup|start|watch|score [every_N_iterations]"; exit 1 ;;
 esac
