@@ -4,6 +4,7 @@
 #   bash scripts/brev_lean.sh start   # walk (3000 it) + stand-up (5000 it) in tmux
 #   bash scripts/brev_lean.sh watch   # one-screen status of both runs
 #   bash scripts/brev_lean.sh score   # progress table (reward, falls, tracking error) every 100 iterations
+#   bash scripts/brev_lean.sh baseline # wait for the lean walk to end, then train the 872 g BOM walk (1500 it) in tmux "base"
 # First time on a fresh box (nothing cloned yet):
 #   curl -sL https://raw.githubusercontent.com/Pham-Ba-Tan-Tai/xgoduck_rl/main/scripts/brev_lean.sh | bash -s setup
 set -u
@@ -11,6 +12,7 @@ export PATH="$HOME/.local/bin:$PATH"
 REPO=https://github.com/Pham-Ba-Tan-Tai/xgoduck_rl.git
 WALK=Mjlab-Velocity-Flat-XgoDuck-SCS0009-Lean
 STAND=Mjlab-StandUp-Flat-XgoDuck-SCS0009-Lean
+BASE=Mjlab-Velocity-Flat-XgoDuck-BOM   # stock 872 g duck, same recipe: the control run
 
 setup() {
   cd ~
@@ -42,8 +44,19 @@ start() {
   echo "STARTED. Check with: bash ~/xgoduck_rl/scripts/brev_lean.sh watch"
 }
 
+baseline() {
+  # Control run: if the stock duck tracks velocity and the lean one does not,
+  # the lean hardware is the problem; if both fail, the recipe is.
+  cd ~/xgoduck_rl
+  tmux kill-session -t base 2>/dev/null
+  tmux new -d -s base "cd ~/xgoduck_rl && while tmux has-session -t walk 2>/dev/null; do sleep 60; done; uv run train $BASE --env.scene.num-envs 4096 --agent.max-iterations ${2:-1500} 2>&1 | tee ~/base.log"
+  sleep 2; tmux ls
+  echo "BASELINE QUEUED: starts when the walk session ends; log ~/base.log"
+}
+
 watch() {
-  for n in walk stand; do
+  for n in walk stand base; do
+    [ "$n" = base ] && [ ! -f ~/base.log ] && continue
     echo "== $n: $(grep -c 'Learning iteration' ~/$n.log 2>/dev/null) iterations logged, tmux $(tmux has-session -t $n 2>/dev/null && echo alive || echo GONE)"
     grep -E "Learning iteration|Mean reward|Mean episode length|drop_tilt|Traceback|Error|out of memory" ~/$n.log 2>/dev/null | tail -4
   done
@@ -70,6 +83,10 @@ def parse(path):
             d[k.strip()] = float(v)
         eta = re.search(r"ETA:\s+(\S+)", b)
         d["eta"] = eta.group(1) if eta else "?"
+        # error_vel_xy is summed over the episode / 400 steps, so it grows with
+        # episode length; divide it out to get a real mean error in m/s.
+        if "Metrics/twist/error_vel_xy" in d and d.get("Mean episode length"):
+            d["real_err"] = d["Metrics/twist/error_vel_xy"] / (d["Mean episode length"] / 400.0)
         rows.append(d)
     return rows
 def show(name, path, cols, hint):
@@ -88,14 +105,19 @@ def show(name, path, cols, hint):
         print(f"{r['it']:>6} " + " ".join(f"{r.get(c[1], float('nan')):>{c[2]}.{c[3]}f}" for c in cols))
     print("   " + hint)
     print()
-show("WALK", f"{H}/walk.log", [
+WALK_COLS = [
     ("reward", "Mean reward", 7, 2),
     ("ep_len", "Mean episode length", 7, 1),
     ("falls", "Episode_Termination/fell_over", 6, 2),
     ("vel_err", "Metrics/twist/error_vel_xy", 8, 3),
+    ("m/s", "real_err", 6, 3),
     ("yaw_err", "Metrics/twist/error_vel_yaw", 8, 3),
     ("slip", "Metrics/slip_velocity_mean", 6, 3),
-], "good = reward up, ep_len near the max, falls near 0, vel_err under ~0.1 m/s")
+]
+WALK_HINT = "m/s = real mean speed error; a duck that never moves scores ~0.17-0.22, walking well is under ~0.1; falls near 0"
+show("WALK (lean 753 g)", f"{H}/walk.log", WALK_COLS, WALK_HINT)
+if os.path.exists(f"{H}/base.log"):
+    show("BASELINE WALK (stock 872 g)", f"{H}/base.log", WALK_COLS, WALK_HINT)
 show("STAND-UP", f"{H}/stand.log", [
     ("reward", "Mean reward", 7, 2),
     ("ep_len", "Mean episode length", 7, 1),
@@ -108,6 +130,6 @@ PY
 }
 
 case "${1:-}" in
-  setup) setup ;; start) start ;; watch) watch ;; score) score "$@" ;;
-  *) echo "usage: $0 setup|start|watch|score [every_N_iterations]"; exit 1 ;;
+  setup) setup ;; start) start ;; watch) watch ;; score) score "$@" ;; baseline) baseline "$@" ;;
+  *) echo "usage: $0 setup|start|watch|score [every_N_iterations]|baseline [iterations]"; exit 1 ;;
 esac
