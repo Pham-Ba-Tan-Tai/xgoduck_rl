@@ -803,6 +803,129 @@ for _variant, _suffix in (("hls1910_bom", "BOM"), ("scs0009_lean", "SCS0009-Lean
         )
 
 
+# All-STS3215 duck (2026-11-12): one servo type, straight off the 2S pack, longer
+# legs and neck to fit it. Hip yaw, head roll and the jaw have no servo; the
+# layout says which leg joints keep one:
+#   leg8   hip roll + hip pitch + knee + ankle   (11 servos with the 3 head ones)
+#   leg6a  hip pitch + knee + ankle, no hip roll (9 servos)
+#   leg6b  hip roll + hip pitch + knee, no ankle (9 servos)
+# A joint with no servo stays in the model, pinned at its HOME angle with a
+# torque-less motor, so observations and actions keep the 14-joint layout.
+# Logs go to <experiment>_sts3215_<model>_<layout>.
+from mjlab_microduck.robot.xgoduck_constants import (
+    _bom_json,
+    locked_joints,
+    to_sts3215,
+)
+
+# Datasheet servo model, nothing measured yet: train across the plausible range.
+STS3215_FRICTION_DR = (0.5, 2.0)
+STS3215_ARMATURE_DR = (0.6, 1.6)
+STS3215_KP_DR = (0.8, 1.2)
+
+# Walk command ranges per servo model: (forward/back, sideways, turn, reverse bucket).
+# The C001 turns at 52 rpm, about half the speed the stock gait uses, so it is
+# asked for half the speed. Turning is small everywhere: there is no hip yaw.
+_STS3215_TWIST = {
+    "c001": ((-0.2, 0.2), (-0.15, 0.15), (-0.3, 0.3), (-0.1, -0.05)),
+    "c046": ((-0.4, 0.4), (-0.3, 0.3), (-0.3, 0.3), (-0.2, -0.1)),
+}
+_HEAD_ROLL_SLOT = 3  # head_pose command order: neck_pitch, head_pitch, head_yaw, head_roll
+
+
+def _zero_head_roll(ranges):
+    ranges = list(ranges)
+    ranges[_HEAD_ROLL_SLOT] = (0.0, 0.0)
+    return tuple(ranges)
+
+
+def _shift_standup_heights(cfg, dz):
+    """Longer legs: every trunk-height target of the stand-up task moves up by dz."""
+    r = cfg.rewards
+    for name in ("height_stand", "height_stand_sharp", "height_stand_l1", "standing_composite"):
+        r[name].params["target_height"] += dz
+    r["com_upward_velocity"].params["max_height"] += dz
+    r["upright_sharp"].params["height_high"] += dz
+    r["arrival_damping"].params["height_low"] += dz
+    r["arrival_damping"].params["height_high"] += dz
+    if "head_pose_bias" in r:
+        r["head_pose_bias"].params["gate_height_low"] += dz
+        r["head_pose_bias"].params["gate_height_high"] += dz
+    if "body_pose_tracking" in r:
+        r["body_pose_tracking"].params["nominal_height"] += dz
+    drop = cfg.events["set_ground_state"].params
+    drop["drop_z_min"] += dz
+    drop["drop_z_max"] += dz
+
+
+def _with_sts3215(cfg, layout, model, standup=False):
+    variant = f"sts3215_{layout}"
+    locked = locked_joints(variant)
+    robot = with_bom(cfg.scene.entities["robot"], variant)
+    actuators = []
+    for a in robot.articulation.actuators:
+        actuators.extend(to_sts3215(a, model, locked))
+    robot.articulation.actuators = tuple(actuators)
+    cfg.scene.entities["robot"] = robot
+
+    if "randomize_joint_friction" in cfg.events:
+        cfg.events["randomize_joint_friction"].params["scale_range"] = STS3215_FRICTION_DR
+    if "randomize_armature" in cfg.events:
+        cfg.events["randomize_armature"].params["ranges"] = STS3215_ARMATURE_DR
+    cfg.events["randomize_motor_gains"] = EventTermCfg(
+        func=microduck_mdp.randomize_delayed_actuator_gains,
+        mode="reset",
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "operation": "scale",
+            "kp_range": STS3215_KP_DR,
+            "kd_range": (1.0, 1.0),
+        },
+    )
+
+    # The head has no roll servo: never command it.
+    if "head_roll" in locked and "head_pose" in cfg.commands:
+        cfg.commands["head_pose"].ranges = _zero_head_roll(cfg.commands["head_pose"].ranges)
+        if "head_pose_range" in cfg.curriculum:
+            for stage in cfg.curriculum["head_pose_range"].params["range_stages"]:
+                stage["ranges"] = _zero_head_roll(stage["ranges"])
+
+    if standup:
+        _shift_standup_heights(cfg, _bom_json(variant)["stand_dz_m"])
+        return cfg
+
+    lin_x, lin_y, ang_z, reverse = _STS3215_TWIST[model]
+    if "left_hip_roll" in locked:
+        lin_y = (0.0, 0.0)  # no hip roll: it cannot step sideways
+    twist = cfg.commands["twist"]
+    twist.ranges.lin_vel_x = lin_x
+    twist.ranges.lin_vel_y = lin_y
+    twist.ranges.ang_vel_z = ang_z
+    twist.rel_turn_in_place_envs = 0.0
+    if getattr(twist, "rel_backward_envs", 0.0):
+        twist.backward_speed_range = reverse
+    return cfg
+
+
+for _model in ("c001", "c046"):
+    for _layout in ("leg8", "leg6a", "leg6b"):
+        _tag = f"STS-{_model.upper()}-{_layout.capitalize()}"
+        for _task_id, _factory, _runner_cfg, _standup in (
+            (f"Mjlab-Velocity-Flat-XgoDuck-{_tag}", _xgoduck_velocity_cfg, XgoduckRlCfg, False),
+            (f"Mjlab-StandUp-Flat-XgoDuck-{_tag}", _xgoduck_standup_cfg, XgoduckStandUpRlCfg, True),
+        ):
+            register_mjlab_task(
+                task_id=_task_id,
+                env_cfg=_with_sts3215(_factory(), _layout, _model, _standup),
+                play_env_cfg=_with_sts3215(_factory(play=True), _layout, _model, _standup),
+                rl_cfg=replace(
+                    _runner_cfg,
+                    experiment_name=f"{_runner_cfg.experiment_name}_sts3215_{_model}_{_layout}",
+                ),
+                runner_cls=MicroduckOnPolicyRunner,
+            )
+
+
 from mjlab_microduck.play_hook import maybe_inject_latest_checkpoint
 
 # After all task ids are registered: `play TASK` with no checkpoint flag

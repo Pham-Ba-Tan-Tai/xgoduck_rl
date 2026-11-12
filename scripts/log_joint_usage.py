@@ -48,6 +48,7 @@ def _quiet():
 SAT_FRACTION = 0.9      # "maxed out" = at least this share of the torque cap
 LOCK_RANGE_DEG = 10.0   # hint: p1..p99 range narrower than this -> lock?
 CHEAP_TORQUE = 0.4      # hint: p99 torque below this share of the cap -> cheaper?
+NO_SERVO_CAP = 1e-2     # N*m: a joint whose motor cap is below this has no servo
 
 
 def _actuated_joints(mj_model):
@@ -167,6 +168,15 @@ def main():
     rows = []
     for j, name in enumerate(names):
         range_deg = math.degrees((hi[j] - lo[j]).item())
+        if caps[j].item() < NO_SERVO_CAP:
+            # Fixed printed joint (no servo): nothing to rate against.
+            rows.append({
+                "joint": name, "peak_Nm": 0.0, "p99_Nm": 0.0, "rms_Nm": 0.0,
+                "p99_pct_cap": 0.0, "sat_pct": 0.0,
+                "min_deg": math.degrees(lo[j].item()), "max_deg": math.degrees(hi[j].item()),
+                "range_deg": range_deg, "p99_speed_rad_s": spd[j].item(), "hint": "no servo",
+            })
+            continue
         p99_frac = (p99[j] / caps[j]).item()
         rows.append({
             "joint": name,

@@ -131,11 +131,60 @@ def to_scs0009(actuator: FrictionDRBamActuatorCfg) -> FrictionDRBamActuatorCfg:
     )
 
 
+# All-STS3215 duck (2026-11-12): Feetech STS3215 on every joint that keeps a
+# servo, straight off the 2S pack. Datasheet estimates, not BAM fits: kt = V/w0
+# and R = kt*V/stall at 7.4 V; friction is scaled from the HLS1910 fit by the
+# stall-torque ratio. C001 = 1:345 (19.5 kg.cm, 52 rpm), C046 = 1:147
+# (14.4 kg.cm, 106 rpm). The sts3215 tasks randomize friction, armature and
+# kp_fw widely (STS3215_*_DR in tasks/__init__.py).
+STS3215_MODELS = ("c001", "c046")
+_NO_SERVO_JSON: Path = _ROBOT_DIR / "params" / "no_servo.json"
+
+
+def locked_joints(variant: str) -> tuple[str, ...]:
+    """Joints of a BOM variant that have no servo (fixed printed parts)."""
+    return tuple(_bom_json(variant).get("locked_joints_rad", {}))
+
+
+def to_sts3215(
+    actuator: FrictionDRBamActuatorCfg, model: str, locked: tuple[str, ...] = (),
+) -> tuple[FrictionDRBamActuatorCfg, ...]:
+    """STS3215 motor on every servo joint; a torque-less motor on locked joints."""
+    assert model in STS3215_MODELS, model
+    path = _ROBOT_DIR / "params" / f"sts3215_{model}_datasheet.json"
+    assert path.exists(), f"STS3215 params not found: {path}"
+    skip = "".join(f"(?!{name}$)" for name in locked)
+    servo = replace(
+        actuator,
+        json_path=str(path),
+        target_names_expr=(rf"^(?!passive_){skip}.*",),
+        vin_range=(7.0, 7.8),
+        vin_min=6.6,
+    )
+    if not locked:
+        return (servo,)
+    none = replace(
+        actuator,
+        json_path=str(_NO_SERVO_JSON),
+        target_names_expr=tuple(rf"^{name}$" for name in locked),
+    )
+    return (servo, none)
+
+
 # Full-BOM mass study (road map Phase 4, 2026-11-09). Per-body mass, CoM and
 # inertia from every BOM part, with the UNO Q stack on the trunk's back, made by
 # cad/xgoduck_scs0009/export_bom_models.py. "scs0009_lean" also shortens the
 # thigh, shank and neck (moved body pos), so the trunk spawns stand_dz lower.
-BOM_VARIANTS = ("hls1910_bom", "scs0009_lean")
+BOM_VARIANTS = (
+    "hls1910_bom", "scs0009_lean",
+    "sts3215_leg8", "sts3215_leg6a", "sts3215_leg6b",
+)
+
+# A joint with no servo is a fixed printed part. It stays in the model (so joint
+# order, observations and actions keep their layout) but its range is pinned to
+# this half-width around the angle it is fixed at, and its actuator is swapped
+# for the torque-less "no_servo" motor (see to_sts3215).
+_LOCK_HALF_RANGE = 0.002
 
 
 def _bom_json(variant: str) -> dict:
@@ -146,10 +195,17 @@ def _bom_json(variant: str) -> dict:
 
 def _apply_bom(spec: mujoco.MjSpec, variant: str) -> mujoco.MjSpec:
     bom = _bom_json(variant)
-    ranges = bom.get("joint_range_rad", {})
+    ranges = dict(bom.get("joint_range_rad", {}))
+    locked = bom.get("locked_joints_rad", {})
+    for name, angle in locked.items():
+        ranges[name] = [angle - _LOCK_HALF_RANGE, angle + _LOCK_HALF_RANGE]
     for joint in spec.joints:
         if joint.name in ranges:
             joint.range = ranges[joint.name]
+        if joint.name in locked:
+            # Stiffest limit the 4-5 ms physics step allows: a rigid printed part.
+            joint.solref_limit = [0.01, 1.0]
+            joint.solimp_limit = [0.99, 0.999, 0.0001, 0.5, 2.0]
     bodies = bom["bodies"]
     for body in spec.bodies:
         b = bodies.get(body.name)
