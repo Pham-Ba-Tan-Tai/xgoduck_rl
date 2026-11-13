@@ -178,6 +178,10 @@ def to_sts3215(
 BOM_VARIANTS = (
     "hls1910_bom", "scs0009_lean",
     "sts3215_leg8", "sts3215_leg6a", "sts3215_leg6b",
+    # Drawn in CAD around the real ST-3215 (cad/xgoduck_sts3215/build_sts_duck.py):
+    # own link lengths, masses, inertias, meshes and feet. The three above are the
+    # stock duck with scaled links and are kept only to compare.
+    "sts3215cad_leg8", "sts3215cad_leg6a", "sts3215cad_leg6b",
 )
 
 # A joint with no servo is a fixed printed part. It stays in the model (so joint
@@ -207,6 +211,7 @@ def _apply_bom(spec: mujoco.MjSpec, variant: str) -> mujoco.MjSpec:
             joint.solref_limit = [0.01, 1.0]
             joint.solimp_limit = [0.99, 0.999, 0.0001, 0.5, 2.0]
     bodies = bom["bodies"]
+    meshes = bom.get("meshes", {})
     for body in spec.bodies:
         b = bodies.get(body.name)
         if b is None:
@@ -217,8 +222,21 @@ def _apply_bom(spec: mujoco.MjSpec, variant: str) -> mujoco.MjSpec:
         body.iquat = b["iquat"]
         body.fullinertia = [math.nan] * 6
         if "pos" in b:
-            _shrink_parent_meshes(spec, body, b["pos"])
+            if not meshes:
+                _shrink_parent_meshes(spec, body, b["pos"])
             body.pos = b["pos"]
+        if "quat" in b:
+            body.quat = b["quat"]
+    # A CAD-built variant brings its own link meshes (already in the body frames).
+    for mesh_name, file in meshes.items():
+        mesh = spec.mesh(mesh_name)
+        mesh.name = mesh_name
+        mesh.file = file
+        mesh.scale = [1.0, 1.0, 1.0]
+    site_pos = bom.get("sites", {})
+    for site in spec.sites:
+        if site.name in site_pos:
+            site.pos = site_pos[site.name]
     return spec
 
 

@@ -858,8 +858,8 @@ def _shift_standup_heights(cfg, dz):
     drop["drop_z_max"] += dz
 
 
-def _with_sts3215(cfg, layout, model, standup=False):
-    variant = f"sts3215_{layout}"
+def _with_sts3215(cfg, layout, model, standup=False, design="sts3215"):
+    variant = f"{design}_{layout}"
     locked = locked_joints(variant)
     robot = with_bom(cfg.scene.entities["robot"], variant)
     actuators = []
@@ -921,6 +921,31 @@ for _model in ("c001", "c046"):
                 rl_cfg=replace(
                     _runner_cfg,
                     experiment_name=f"{_runner_cfg.experiment_name}_sts3215_{_model}_{_layout}",
+                ),
+                runner_cls=MicroduckOnPolicyRunner,
+            )
+
+
+# The same duck drawn in CAD around the real ST-3215 (2026-11-13): parts in
+# cad/xgoduck_sts3215/parts, model from build_sts_duck.py. Own link lengths,
+# masses, inertias, meshes and 95 x 68 mm feet instead of scaled stock links.
+# Task ids ...-STS-CAD-<MODEL>-<Layout>, logs <experiment>_sts3215cad_<model>_<layout>.
+for _model in ("c001", "c046"):
+    for _layout in ("leg8", "leg6a", "leg6b"):
+        _tag = f"STS-CAD-{_model.upper()}-{_layout.capitalize()}"
+        for _task_id, _factory, _runner_cfg, _standup in (
+            (f"Mjlab-Velocity-Flat-XgoDuck-{_tag}", _xgoduck_velocity_cfg, XgoduckRlCfg, False),
+            (f"Mjlab-StandUp-Flat-XgoDuck-{_tag}", _xgoduck_standup_cfg, XgoduckStandUpRlCfg, True),
+        ):
+            register_mjlab_task(
+                task_id=_task_id,
+                env_cfg=_with_sts3215(_factory(), _layout, _model, _standup, design="sts3215cad"),
+                play_env_cfg=_with_sts3215(
+                    _factory(play=True), _layout, _model, _standup, design="sts3215cad"
+                ),
+                rl_cfg=replace(
+                    _runner_cfg,
+                    experiment_name=f"{_runner_cfg.experiment_name}_sts3215cad_{_model}_{_layout}",
                 ),
                 runner_cls=MicroduckOnPolicyRunner,
             )

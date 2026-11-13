@@ -8,17 +8,20 @@
 #   bash scripts/brev_sts.sh watch                 # one-screen status of every run
 #   bash scripts/brev_sts.sh score [every_N]       # progress tables (reward, falls, real speed error)
 #   bash scripts/brev_sts.sh load  [model]         # servo load table from each walk run's latest checkpoint
+# Trains the duck drawn in CAD around the real ST-3215 (cad/xgoduck_sts3215, tasks ...-STS-CAD-...).
+# DESIGN=scaled bash scripts/brev_sts.sh ...   uses the old scaled-stock model instead (2026-11-12, did not walk).
 # Layouts: leg8 (11 servos), leg6a (no hip roll, 9), leg6b (no ankle, 9). Models: c001 (slow, cheap), c046 (fast).
 # First time on a fresh box (nothing cloned yet):
 #   curl -sL https://raw.githubusercontent.com/Pham-Ba-Tan-Tai/xgoduck_rl/main/scripts/brev_sts.sh | bash -s setup
 set -u
 export PATH="$HOME/.local/bin:$PATH"
 REPO=https://github.com/Pham-Ba-Tan-Tai/xgoduck_rl.git
+if [ "${DESIGN:-cad}" = "scaled" ]; then TAG="STS"; EXP="sts3215"; else TAG="STS-CAD"; EXP="sts3215cad"; fi
 
 task() {  # task <Velocity|StandUp> <model> <layout>
   local model; model=$(echo "$2" | tr a-z A-Z)
   local layout="$3"; layout="L${layout:1}"
-  echo "Mjlab-$1-Flat-XgoDuck-STS-$model-$layout"
+  echo "Mjlab-$1-Flat-XgoDuck-$TAG-$model-$layout"
 }
 
 parse() {  # sets MODEL, LAYOUTS, ITERS from "[model] [layouts...] [-- iterations]"
@@ -47,7 +50,7 @@ setup() {
   export PATH="$HOME/.local/bin:$PATH"
   echo "uv sync (a few minutes) ..."
   uv sync > ~/uv_sync.log 2>&1 && echo "UV_SYNC_OK" || { echo "UV_SYNC_FAILED"; tail -20 ~/uv_sync.log; exit 1; }
-  [ "$(uv run list-envs 2>/dev/null | grep -c 'XgoDuck-STS-')" -ge 12 ] || { echo "STS_TASKS_MISSING"; exit 1; }
+  [ "$(uv run list-envs 2>/dev/null | grep -c 'XgoDuck-STS-CAD-')" -ge 12 ] || { echo "STS_TASKS_MISSING"; exit 1; }
   command -v tmux >/dev/null || sudo apt-get install -y -qq tmux >/dev/null 2>&1 || true
   echo "SMOKE_START (about 1 minute)"
   uv run train "$(task Velocity c001 leg8)" --env.scene.num-envs 64 --agent.max-iterations 2 > ~/smoke.log 2>&1
@@ -84,7 +87,7 @@ load() {  # servo load from the newest checkpoint of each walk run
   local model="${2:-c001}"
   cd ~/xgoduck_rl
   for layout in leg8 leg6a leg6b; do
-    dir=$(ls -d logs/rsl_rl/xgoduck_velocity_sts3215_${model}_${layout}/*/ 2>/dev/null | tail -1)
+    dir=$(ls -d logs/rsl_rl/xgoduck_velocity_${EXP}_${model}_${layout}/*/ 2>/dev/null | tail -1)
     [ -n "$dir" ] || continue
     ckpt=$(ls "$dir"model_*.pt 2>/dev/null | sort -t_ -k2 -n | sed 's/.*model_\([0-9]*\)\.pt/\1 &/' | sort -n | tail -1 | cut -d' ' -f2)
     [ -n "$ckpt" ] || continue
@@ -131,8 +134,10 @@ WALK_COLS = [("reward", "Mean reward", 7, 2), ("ep_len", "Mean episode length", 
              ("falls", "Episode_Termination/fell_over", 6, 2),
              ("m/s", "real_err", 6, 3), ("yaw_err", "Metrics/twist/error_vel_yaw", 8, 3),
              ("slip", "Metrics/slip_velocity_mean", 6, 3)]
-STILL = {"c001": "~0.08-0.11", "c046": "~0.16-0.22"}
-GOOD = {"c001": "under ~0.05", "c046": "under ~0.10"}
+# c001: measured 2026-11-13 with scripts/standing_still_score.py (zero actions, training commands).
+# c046: not measured yet (its commands are twice as fast, so about twice the c001 number).
+STILL = {"c001": "0.14 (measured)", "c046": "~0.28 (not measured)"}
+GOOD = {"c001": "under ~0.07", "c046": "under ~0.14"}
 for path in sorted(glob.glob(f"{H}/walk_*.log")):
     name = os.path.basename(path)[:-4]
     model = name.split("_")[1]
