@@ -835,8 +835,22 @@ _STS3215_TWIST = {
 # smoothness penalty held at -0.2. The first C046 run followed 74-78 % of the
 # forward command up to iteration 750 with the left leg at 82-93 % of its
 # torque limit, then walked less and less as the penalty rose to -0.8.
-_STS3215_SERVO = {"c046slow": "c046"}
-_STS3215_ACTION_RATE_FLOOR = {"c046slow": -0.2}
+_STS3215_SERVO = {"c046slow": "c046", "c046fwd": "c046", "c046fwdslow": "c046"}
+_STS3215_ACTION_RATE_FLOOR = {"c046slow": -0.2, "c046fwd": -0.2, "c046fwdslow": -0.2}
+# "c046fwd" / "c046fwdslow" (2026-11-14): training fixes after the c046slow run stood
+# still (32 % forward at iteration 250).
+#  - forward/back commands only: no hip yaw and +-15 deg hip roll, so turning and
+#    side-stepping are not asked for (turn command 0 = "walk straight")
+#  - the speed reward width follows the command range. With the stock 0.25 m/s
+#    width a duck that never moves earned 67 % (c046slow) / 73 % (c001) of the
+#    speed reward; at width = half the top speed it earns about 44 %
+#  - hip roll may move while walking (posture std 0.05 -> 0.15 rad): the stance
+#    is 119 mm wide, the stock duck's is 83 mm
+#  - smoothness penalty held at -0.2
+_STS3215_TWIST["c046fwd"] = ((-0.4, 0.4), (0.0, 0.0), (0.0, 0.0), (-0.2, -0.1))
+_STS3215_TWIST["c046fwdslow"] = ((-0.25, 0.25), (0.0, 0.0), (0.0, 0.0), (-0.12, -0.06))
+_STS3215_TRACK_STD = {"c046fwd": 0.2, "c046fwdslow": 0.125}
+_STS3215_WALK_HIP_ROLL_STD = {"c046fwd": 0.15, "c046fwdslow": 0.15}
 _HEAD_ROLL_SLOT = 3  # head_pose command order: neck_pitch, head_pitch, head_yaw, head_roll
 
 
@@ -911,6 +925,11 @@ def _with_sts3215(cfg, layout, model, standup=False, design="sts3215"):
     twist.rel_turn_in_place_envs = 0.0
     if getattr(twist, "rel_backward_envs", 0.0):
         twist.backward_speed_range = reverse
+    if model in _STS3215_TRACK_STD:
+        cfg.rewards["track_linear_velocity"].params["std"] = _STS3215_TRACK_STD[model]
+    if model in _STS3215_WALK_HIP_ROLL_STD:
+        for key in ("std_walking", "std_running"):
+            cfg.rewards["pose"].params[key][".*hip_roll.*"] = _STS3215_WALK_HIP_ROLL_STD[model]
     floor = _STS3215_ACTION_RATE_FLOOR.get(model)
     if floor is not None and "action_rate_weight" in cfg.curriculum:
         for stage in cfg.curriculum["action_rate_weight"].params["weight_stages"]:
@@ -941,7 +960,7 @@ for _model in ("c001", "c046"):
 # cad/xgoduck_sts3215/parts, model from build_sts_duck.py. Own link lengths,
 # masses, inertias, meshes and 95 x 68 mm feet instead of scaled stock links.
 # Task ids ...-STS-CAD-<MODEL>-<Layout>, logs <experiment>_sts3215cad_<model>_<layout>.
-for _model in ("c001", "c046", "c046slow"):
+for _model in ("c001", "c046", "c046slow", "c046fwd", "c046fwdslow"):
     for _layout in ("leg8", "leg6a", "leg6b"):
         _tag = f"STS-CAD-{_model.upper()}-{_layout.capitalize()}"
         for _task_id, _factory, _runner_cfg, _standup in (

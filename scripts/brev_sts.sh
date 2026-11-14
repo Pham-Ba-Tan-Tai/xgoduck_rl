@@ -29,7 +29,7 @@ parse() {  # sets MODEL, LAYOUTS, ITERS from "[model] [layouts...] [-- iteration
   MODEL=c001; LAYOUTS=""; ITERS="$1"; shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      c001|c046|c046slow) MODEL="$1" ;;
+      c001|c046|c046slow|c046fwd|c046fwdslow) MODEL="$1" ;;
       leg8|leg6a|leg6b) LAYOUTS="$LAYOUTS $1" ;;
       --) shift; ITERS="${1:-$ITERS}" ;;
       *) echo "unknown argument: $1"; exit 1 ;;
@@ -149,7 +149,7 @@ WALK_COLS = [("reward", "Mean reward", 7, 2), ("ep_len", "Mean episode length", 
              ("slip", "Metrics/slip_velocity_mean", 6, 3)]
 # c001: measured 2026-11-13 with scripts/standing_still_score.py (zero actions, training commands).
 # c046: not measured yet (its commands are twice as fast, so about twice the c001 number).
-STILL = {"c001": "0.14 (measured)", "c046": "0.24 (measured)", "c046slow": "0.168 at the start, 0.146 from iteration 1000 (measured 0.168, scaled for the share of standing ducks)"}
+STILL = {"c046fwd": "about 0.20 (not measured; use the follow subcommand instead)", "c046fwdslow": "about 0.125 (not measured; use the follow subcommand instead)", "c001": "0.14 (measured)", "c046": "0.24 (measured)", "c046slow": "0.168 at the start, 0.146 from iteration 1000 (measured 0.168, scaled for the share of standing ducks)"}
 GOOD = {"c001": "under ~0.07", "c046": "under ~0.12", "c046slow": "under ~0.08"}
 for path in sorted(glob.glob(f"{H}/walk_*.log")):
     name = os.path.basename(path)[:-4]
