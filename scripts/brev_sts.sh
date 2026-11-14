@@ -10,7 +10,8 @@
 #   bash scripts/brev_sts.sh load  [model]         # servo load table from each walk run's latest checkpoint
 # Trains the duck drawn in CAD around the real ST-3215 (cad/xgoduck_sts3215, tasks ...-STS-CAD-...).
 # DESIGN=scaled bash scripts/brev_sts.sh ...   uses the old scaled-stock model instead (2026-11-12, did not walk).
-# Layouts: leg8 (11 servos), leg6a (no hip roll, 9), leg6b (no ankle, 9). Models: c001 (slow, cheap), c046 (fast).
+# Layouts: leg8 (11 servos), leg6a (no hip roll, 9), leg6b (no ankle, 9). Models: c001 (slow, cheap), c046 (fast),
+# c046slow (C046 servo, commands up to 0.25 m/s, smoothness penalty held at -0.2).
 # First time on a fresh box (nothing cloned yet):
 #   curl -sL https://raw.githubusercontent.com/Pham-Ba-Tan-Tai/xgoduck_rl/main/scripts/brev_sts.sh | bash -s setup
 set -u
@@ -28,7 +29,7 @@ parse() {  # sets MODEL, LAYOUTS, ITERS from "[model] [layouts...] [-- iteration
   MODEL=c001; LAYOUTS=""; ITERS="$1"; shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      c001|c046) MODEL="$1" ;;
+      c001|c046|c046slow) MODEL="$1" ;;
       leg8|leg6a|leg6b) LAYOUTS="$LAYOUTS $1" ;;
       --) shift; ITERS="${1:-$ITERS}" ;;
       *) echo "unknown argument: $1"; exit 1 ;;
@@ -95,6 +96,18 @@ load() {  # servo load from the newest checkpoint of each walk run
   done
 }
 
+follow() {  # does each walk run's newest checkpoint move when told?
+  local model="${2:-c001}"
+  cd ~/xgoduck_rl
+  for layout in leg8 leg6a leg6b; do
+    dir=$(ls -d logs/rsl_rl/xgoduck_velocity_${EXP}_${model}_${layout}/*/ 2>/dev/null | tail -1)
+    [ -n "$dir" ] || continue
+    ckpt=$(ls "$dir"model_*.pt 2>/dev/null | sort -t_ -k2 -n | sed 's/.*model_\([0-9]*\)\.pt/\1 &/' | sort -n | tail -1 | cut -d' ' -f2)
+    [ -n "$ckpt" ] || continue
+    uv run python scripts/follow_command_score.py "$(task Velocity "$model" "$layout")" "$ckpt" 2>/dev/null | tail -3
+  done
+}
+
 score() {
   python3 - "${2:-100}" <<'PY'
 import glob, re, sys, os
@@ -136,8 +149,8 @@ WALK_COLS = [("reward", "Mean reward", 7, 2), ("ep_len", "Mean episode length", 
              ("slip", "Metrics/slip_velocity_mean", 6, 3)]
 # c001: measured 2026-11-13 with scripts/standing_still_score.py (zero actions, training commands).
 # c046: not measured yet (its commands are twice as fast, so about twice the c001 number).
-STILL = {"c001": "0.14 (measured)", "c046": "~0.28 (not measured)"}
-GOOD = {"c001": "under ~0.07", "c046": "under ~0.14"}
+STILL = {"c001": "0.14 (measured)", "c046": "0.24 (measured)", "c046slow": "~0.15 (not measured, falls to ~0.13 as standing ducks are added)"}
+GOOD = {"c001": "under ~0.07", "c046": "under ~0.12", "c046slow": "under ~0.07"}
 for path in sorted(glob.glob(f"{H}/walk_*.log")):
     name = os.path.basename(path)[:-4]
     model = name.split("_")[1]
@@ -162,5 +175,6 @@ case "${1:-}" in
   watch) watch ;;
   score) score "$@" ;;
   load)  load "$@" ;;
-  *) echo "usage: $0 setup | walk [c001|c046] [leg8 leg6a leg6b] [-- iterations] | stand [...] | watch | score [every_N] | load [model]"; exit 1 ;;
+  follow) follow "$@" ;;
+  *) echo "usage: $0 setup | walk [c001|c046] [leg8 leg6a leg6b] [-- iterations] | stand [...] | watch | score [every_N] | load [model] | follow [model]"; exit 1 ;;
 esac

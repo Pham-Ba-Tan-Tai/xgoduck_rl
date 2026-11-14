@@ -829,7 +829,14 @@ STS3215_KP_DR = (0.8, 1.2)
 _STS3215_TWIST = {
     "c001": ((-0.2, 0.2), (-0.15, 0.15), (-0.3, 0.3), (-0.1, -0.05)),
     "c046": ((-0.4, 0.4), (-0.3, 0.3), (-0.3, 0.3), (-0.2, -0.1)),
+    "c046slow": ((-0.25, 0.25), (-0.15, 0.15), (-0.3, 0.3), (-0.12, -0.06)),
 }
+# "c046slow" (2026-11-14) is the C046 servo asked for less speed, with the
+# smoothness penalty held at -0.2. The first C046 run followed 74-78 % of the
+# forward command up to iteration 750 with the left leg at 82-93 % of its
+# torque limit, then walked less and less as the penalty rose to -0.8.
+_STS3215_SERVO = {"c046slow": "c046"}
+_STS3215_ACTION_RATE_FLOOR = {"c046slow": -0.2}
 _HEAD_ROLL_SLOT = 3  # head_pose command order: neck_pitch, head_pitch, head_yaw, head_roll
 
 
@@ -864,7 +871,7 @@ def _with_sts3215(cfg, layout, model, standup=False, design="sts3215"):
     robot = with_bom(cfg.scene.entities["robot"], variant)
     actuators = []
     for a in robot.articulation.actuators:
-        actuators.extend(to_sts3215(a, model, locked))
+        actuators.extend(to_sts3215(a, _STS3215_SERVO.get(model, model), locked))
     robot.articulation.actuators = tuple(actuators)
     cfg.scene.entities["robot"] = robot
 
@@ -904,6 +911,10 @@ def _with_sts3215(cfg, layout, model, standup=False, design="sts3215"):
     twist.rel_turn_in_place_envs = 0.0
     if getattr(twist, "rel_backward_envs", 0.0):
         twist.backward_speed_range = reverse
+    floor = _STS3215_ACTION_RATE_FLOOR.get(model)
+    if floor is not None and "action_rate_weight" in cfg.curriculum:
+        for stage in cfg.curriculum["action_rate_weight"].params["weight_stages"]:
+            stage["weight"] = max(stage["weight"], floor)
     return cfg
 
 
@@ -930,7 +941,7 @@ for _model in ("c001", "c046"):
 # cad/xgoduck_sts3215/parts, model from build_sts_duck.py. Own link lengths,
 # masses, inertias, meshes and 95 x 68 mm feet instead of scaled stock links.
 # Task ids ...-STS-CAD-<MODEL>-<Layout>, logs <experiment>_sts3215cad_<model>_<layout>.
-for _model in ("c001", "c046"):
+for _model in ("c001", "c046", "c046slow"):
     for _layout in ("leg8", "leg6a", "leg6b"):
         _tag = f"STS-CAD-{_model.upper()}-{_layout.capitalize()}"
         for _task_id, _factory, _runner_cfg, _standup in (
